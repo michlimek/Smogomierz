@@ -1,0 +1,283 @@
+From b3546c70c003dbddf08c653344793875d551c4f4 Mon Sep 17 00:00:00 2001
+From: Rafal K <jafal99@gmail.com>
+Date: Tue, 25 Feb 2020 17:34:31 +0100
+Subject: [PATCH] Initial support for Domoticz via MQTT
+
+---
+ Smogomierz.ino        |  23 ++++++---
+ defaultConfig.h       |   7 +++
+ src/config.h          |   9 +++-
+ src/domoticz_mqtt.cpp | 113 ++++++++++++++++++++++++++++++++++++++++++
+ src/domoticz_mqtt.h   |   3 ++
+ 5 files changed, 147 insertions(+), 8 deletions(-)
+ create mode 100644 src/domoticz_mqtt.cpp
+ create mode 100644 src/domoticz_mqtt.h
+
+diff --git a/Smogomierz.ino b/Smogomierz.ino
+index 460d1c5..d4320e9 100644
+--- a/Smogomierz.ino
++++ b/Smogomierz.ino
+@@ -122,6 +122,7 @@
+ #include "src/thing_speak.h"
+ #include "src/aqieco.h"
+ #include "src/InfluxDbV2.h" // https://github.com/davidgs/ESP8266_Influx_DB_V2 // CUSTOMIZED! 3.02.2020
++#include "src/domoticz_mqtt.h"
+ 
+ #ifdef ARDUINO_ARCH_ESP8266 // ESP8266 core for Arduino - 2.6.3 or later
+ #ifdef ASYNC_WEBSERVER_ON
+@@ -494,7 +495,7 @@ void setup() {
+     DUST_interval = DUST_interval * DUST_TIME;
+   }
+   if (DEEPSLEEP_ON == true) {
+-    if (LUFTDATEN_ON or AQI_ECO_ON or AIRMONITOR_ON or SMOGLIST_ON or THINGSPEAK_ON or INFLUXDB_ON or MQTT_ON) {
++    if (LUFTDATEN_ON or AQI_ECO_ON or AIRMONITOR_ON or SMOGLIST_ON or THINGSPEAK_ON or INFLUXDB_ON or MQTT_ON or DOMOTICZMQTT_ON) {
+       SENDING_FREQUENCY_interval = SENDING_FREQUENCY_interval * SENDING_FREQUENCY;
+     }
+ #ifdef ARDUINO_ARCH_ESP32
+@@ -507,7 +508,7 @@ void setup() {
+     if (LUFTDATEN_ON or AQI_ECO_ON or AIRMONITOR_ON or SMOGLIST_ON) {
+       SENDING_FREQUENCY_interval = SENDING_FREQUENCY_interval * SENDING_FREQUENCY;
+     }
+-    if (THINGSPEAK_ON or INFLUXDB_ON or MQTT_ON) {
++    if (THINGSPEAK_ON or INFLUXDB_ON or MQTT_ON or DOMOTICZMQTT_ON) {
+       SENDING_DB_FREQUENCY_interval = SENDING_DB_FREQUENCY_interval * SENDING_DB_FREQUENCY;
+     }
+   }
+@@ -541,6 +542,7 @@ void setup() {
+   wifiManager.setCountry("US");
+ #endif
+ 
++  wifiManager.setHostname(device_name); // sethostname before autoconect 
+   if (wifiManager.autoConnect(device_name)) {
+     Serial.println("connected...yeey :)");
+     //wifiManager.setConfigPortalBlocking(false);
+@@ -572,6 +574,8 @@ void setup() {
+   if (MQTT_ON) {
+     mqttclient.setServer(MQTT_HOST, MQTT_PORT);
+   }
++  
++ 
+ 
+   if (INFLUXDB_ON) {
+ 
+@@ -717,7 +721,7 @@ void loop() {
+         takeTHPMeasurements();
+         sendDataToExternalServices();
+       }
+-      if (THINGSPEAK_ON or INFLUXDB_ON or MQTT_ON) {
++      if (THINGSPEAK_ON or INFLUXDB_ON or MQTT_ON or DOMOTICZMQTT_ON) {
+         takeTHPMeasurements();
+         sendDataToExternalDBs();
+       }
+@@ -754,7 +758,7 @@ void loop() {
+         takeTHPMeasurements();
+         sendDataToExternalServices();
+       }
+-      if (THINGSPEAK_ON or INFLUXDB_ON or MQTT_ON) {
++      if (THINGSPEAK_ON or INFLUXDB_ON or MQTT_ON or DOMOTICZMQTT_ON) {
+         takeTHPMeasurements();
+         sendDataToExternalDBs();
+       }
+@@ -783,7 +787,7 @@ void loop() {
+     }
+   }
+ 
+-  if (THINGSPEAK_ON or INFLUXDB_ON or MQTT_ON) {
++  if (THINGSPEAK_ON or INFLUXDB_ON or MQTT_ON or DOMOTICZMQTT_ON) {
+     unsigned long current_SENDING_DB_FREQUENCY_Millis = millis();
+     if (current_SENDING_DB_FREQUENCY_Millis - previous_SENDING_DB_FREQUENCY_Millis >= SENDING_DB_FREQUENCY_interval) {
+       takeTHPMeasurements();
+@@ -854,7 +858,13 @@ void sendDataToExternalDBs() {
+       Serial.println("Sending measurement data to the Thingspeak service!\n");
+     }
+   }
+-
++  if (DOMOTICZMQTT_ON) {
++    sendDataToDomoticzMqtt(currentTemperature, currentPressure, currentHumidity, averagePM1, averagePM25, averagePM4, averagePM10);
++    if (DEBUG) {
++      Serial.println("Sending measurement data to the domoticz via MQTT !\n");
++    }
++  }
++  
+   if (INFLUXDB_ON) {
+     InfluxdbV2 influx(INFLUXDB_HOST, INFLUXDB_PORT);
+     if (!strcmp(INFLUXDB_VERSION, "2")) {
+@@ -1496,4 +1506,3 @@ void ErrtoMess(char *mess, uint8_t r)
+   Serial.println(buf);
+ }
+ #endif
+-
+diff --git a/defaultConfig.h b/defaultConfig.h
+index 94b4257..35c4d9d 100644
+--- a/defaultConfig.h
++++ b/defaultConfig.h
+@@ -60,6 +60,13 @@ bool AQI_ECO_ON = false;
+ char AQI_ECO_HOST[128] = "???.aqi.eco";
+ char AQI_ECO_PATH[64] = "/u/???";
+ 
++bool DOMOTICZMQTT_ON= true;
++char DOMOTICZMQTT_TOPIC[128] = "domoticz/in";
++uint16_t DOMOTICZ_THP_IDX = 4;
++uint16_t DOMOTICZ_PM1_IDX = 5;
++uint16_t DOMOTICZ_PM25_IDX = 6;
++uint16_t DOMOTICZ_PM10_IDX = 7;
++
+ int SENDING_FREQUENCY = 3;
+ int SENDING_DB_FREQUENCY = 3;
+ bool DEEPSLEEP_ON = false;
+diff --git a/src/config.h b/src/config.h
+index b81253f..3a845b4 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -60,6 +60,13 @@ extern bool AQI_ECO_ON;
+ extern char AQI_ECO_HOST[128];
+ extern char AQI_ECO_PATH[64];
+ 
++extern bool DOMOTICZMQTT_ON;
++extern char DOMOTICZMQTT_TOPIC[128];
++extern uint16_t DOMOTICZ_THP_IDX;
++extern uint16_t DOMOTICZ_PM1_IDX;
++extern uint16_t DOMOTICZ_PM25_IDX;
++extern uint16_t DOMOTICZ_PM10_IDX;
++
+ extern int SENDING_FREQUENCY;
+ extern int SENDING_DB_FREQUENCY;
+ extern bool DEEPSLEEP_ON;
+@@ -93,4 +100,4 @@ const char HARDWAREVERSION[] = "1.0 - ESP8266";
+ #elif defined(ARDUINO_ARCH_ESP32)
+ const char SOFTWAREVERSION[] = "2.7.5 build " __TIME__ " " __DATE__;
+ const char HARDWAREVERSION[] = "2.0 - ESP32";
+-#endif
+\ No newline at end of file
++#endif
+diff --git a/src/domoticz_mqtt.cpp b/src/domoticz_mqtt.cpp
+new file mode 100644
+index 0000000..afc7a85
+--- /dev/null
++++ b/src/domoticz_mqtt.cpp
+@@ -0,0 +1,113 @@
++#ifdef ARDUINO_ARCH_ESP8266
++#include <ESP8266WiFi.h>
++#elif defined ARDUINO_ARCH_ESP32
++#include <WiFi.h>
++#include <WiFiClient.h>
++#endif
++#include <PubSubClient.h>
++#include <ArduinoJson.h>
++
++#include "domoticz_mqtt.h"
++#include "config.h"
++#include "THPSensor.h"
++
++
++extern PubSubClient mqttclient;
++
++
++
++int getRSSI(){
++    int WiFiRSSI = WiFi.RSSI();
++    int WiFiQuality;
++  if (WiFiRSSI <= -100) {
++    WiFiQuality = 0;
++  } else if (WiFiRSSI >= -50) {
++    WiFiQuality = 10;
++  } else {
++    WiFiQuality = (2 * (WiFiRSSI + 100))/10;
++  }
++  return WiFiQuality;
++}
++/*
++https://www.domoticz.com/wiki/MQTT#MQTT_to_Domoticz
++https://www.domoticz.com/wiki/Domoticz_API/JSON_URL%27s#Update_devices.2Fsensors
++https://piandmore.wordpress.com/2019/02/04/mqtt-out-for-domoticz/
++
++topic domoticz/in
++P {"command":"udevice", "idx":1234, "svalue":"ba;pr"}
++T {"command":"udevice", "idx":1234, "svalue":"tm"}
++H {"command":"udevice", "idx":1234, "svalue":"hu;lv"}
++TP {"command":"udevice", "idx":1234, "svalue":"tm;ba;pr"}
++TH {"command":"udevice", "idx":1234, "svalue":"tm;hu;lv"}
++THP {"command":"udevice", "idx":1234, "svalue":"tm;hu;lv;ba;pr"}
++
++tm- temperature
++ba - presure, pr -prediction (0 = No Info 1 = Sunny 2 = Paryly Cloudy 3 = Cloudy 4 = Rain)
++hu - humidity, lv - humidity comfort (0=Normal 1=Comfortable 2=Dry 3=Wet)
++
++rssi (0-10) - not displayed in domoticz
++*/
++
++void sendDataToDomoticzMqtt(float currentTemperature, float currentPressure, float currentHumidity, int averagePM1, int averagePM25, int averagePM4, int averagePM10) {
++
++    if (!(DOMOTICZMQTT_ON)) {
++        return;
++    }
++    if (!mqttclient.connected()) {
++      return;
++    }
++
++    StaticJsonDocument<200> jsonBuffer;
++    JsonObject json = jsonBuffer.to<JsonObject>();
++    char buffer[200];
++
++    if(hasTHPSensor() && DOMOTICZ_THP_IDX !=0){
++        json["command"] = "udevice";
++        json["idx"] = int(DOMOTICZ_THP_IDX);
++        if(getTHPType()==TPH){
++            json["svalue"] = String(currentTemperature)+";"+String(currentHumidity)+";"+"0"+";"+String(currentPressure)+";"+"0";
++        }else if(getTHPType()==TP){
++            json["svalue"] = String(currentTemperature)+";"+String(currentPressure)+";"+"0";
++        }else if(getTHPType()==TH){
++            json["svalue"] = String(currentTemperature)+";"+String(currentHumidity)+";"+"0";
++        }else if(getTHPType()==T){
++            json["svalue"] = String(currentTemperature);            
++        }else if(getTHPType()==H){
++            json["svalue"] = String(currentHumidity)+";"+"0";            
++        }else if(getTHPType()==P){    
++            json["svalue"] = String(currentPressure)+";"+"0";            
++        }
++        json["rssi"] = String(getRSSI());
++        serializeJson(json, buffer);
++        mqttclient.publish(DOMOTICZMQTT_TOPIC, buffer);
++    }
++  if (strcmp(DUST_MODEL, "Non")) {  
++       if(DOMOTICZ_PM1_IDX !=0){
++        json["command"] = "udevice";
++        json["idx"] = int(DOMOTICZ_PM1_IDX);
++        json["svalue"] = String(averagePM1);
++        serializeJson(json, buffer);
++        mqttclient.publish(DOMOTICZMQTT_TOPIC, buffer);
++        jsonBuffer.clear();
++       }
++       if(DOMOTICZ_PM25_IDX !=0){
++        json["command"] = "udevice";
++        json["idx"] = int(DOMOTICZ_PM25_IDX);
++        json["svalue"] = String(averagePM25);
++        serializeJson(json, buffer);
++        mqttclient.publish(DOMOTICZMQTT_TOPIC, buffer);
++        jsonBuffer.clear();
++       }
++       if(DOMOTICZ_PM10_IDX !=0){
++        json["command"] = "udevice";
++        json["idx"] = int(DOMOTICZ_PM10_IDX);
++        json["svalue"] = String(averagePM10);
++        serializeJson(json, buffer);
++        mqttclient.publish(DOMOTICZMQTT_TOPIC, buffer);
++        jsonBuffer.clear();
++       }
++    }
++
++}
++
++
+diff --git a/src/domoticz_mqtt.h b/src/domoticz_mqtt.h
+new file mode 100644
+index 0000000..a13ea70
+--- /dev/null
++++ b/src/domoticz_mqtt.h
+@@ -0,0 +1,3 @@
++#pragma once
++
++void sendDataToDomoticzMqtt(float currentTemperature, float currentPressure, float currentHumidity, int averagePM1, int averagePM25, int averagePM4, int averagePM10);
+-- 
+2.24.1
+
